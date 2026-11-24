@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rule-context-compression"
+version = "0.2.0"
+description = "Elastic reading evidence and budget-aware tool output compression"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["tokenizers==0.23.3"]
+
+[project.scripts]
+context-compress = "context_compression.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["context_compression", "context_compression.*"]
+
+[tool.setuptools.package-data]
+context_compression = ["assets/tokenizer.json"]
