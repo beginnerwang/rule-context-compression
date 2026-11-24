@@ -1,0 +1,11 @@
+- insert:
+    - id: rule-context-compression
+      name: ./index.mjs
+      config:
+        reading:
+          enabled: true
+          documents: {}
+        output:
+          enabled: true
+          tools: [grep, glob]
+          budget: 1024

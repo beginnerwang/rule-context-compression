@@ -56,10 +56,67 @@ context-compress restore "$source_id" --pointer /error
 
 默认原文库存于当前工作目录下的 `runtime/originals/`。使用自定义位置时，在压缩与回查命令中传入相同的 `--store DIR`。
 
+## 安装为 DSH 插件
+
+可选的 `dsh-plugin/` 是独立的 JavaScript ESM/Cordis bundle，通过 DSH 的公开工具接口调用本包。已针对 DSH `0.2.1-rc.5` 验证。先依照上方步骤将 Python 包安装到虚拟环境，再从源码根目录向使用的 DSH profile 添加 bundle。以下命令要求 `dsh` 和 `pnpm` 在 PATH 中。如果使用 DSH 源码构建，可用 `node /path/to/deepseek-harness/apps/cli/lib/bin.js` 代替 `dsh`。
+
+```sh
+dsh plugin --profile headless add --offline --ignore-scripts "link:$PWD/dsh-plugin"
+dsh plugin --profile web add --offline --ignore-scripts "link:$PWD/dsh-plugin"
+```
+
+链接安装会引用本地插件目录。只使用一个 profile 时执行对应的一条即可。向对应的 `$DSH_HOME/profiles/<profile>/cordis.patch.yml` 追加以下 YAML 行，保留已有配置。默认 `DSH_HOME` 为 `~/.dsh`。把示例中的两个绝对路径换成已安装本包的 Python 解释器和允许读取的 UTF-8 文件。可用 `python -c "import sys; print(sys.executable)"` 查询解释器路径。
+
+```yaml
+- id: rule-context-compression
+  config:
+    python: /absolute/path/to/.venv/bin/python
+    reading:
+      enabled: true
+      documents:
+        project-readme: /absolute/path/to/rule-context-compression/README.md
+    output:
+      enabled: true
+      tools: [grep, glob]
+      budget: 1024
+```
+
+重新启动已运行的 profile，新会话即可使用。可先用 `dsh headless --dump-config` 或 `dsh web --dump-config` 检查最终配置。DSH 的配置覆盖以完整 `config` 为单位，编辑时将两个开关与 Python 路径放在同一个插件配置块内。
+
+- **按需阅读。** DSH 在需要阅读时调用 `compress_reading`，传入 `document_id`、`question`，选择题可另传字符串映射 `options`。可以在会话里问“请用 project-readme 的原文说明如何安装插件”。文件内容通过 stdin 送入压缩器，模型收到最多 4096 token 的原文证据 JSON。文档 ID 是管理员授予该 profile 的读取范围，因此只登记允许该 profile 内 Agent 阅读的文件。默认目录表为空。单个普通 UTF-8 文件上限 16 MiB，符号链接不受支持。若文件被原子替换，重新加载插件以绑定新文件。设置 `reading.enabled: false` 会注销阅读工具。PTC 模式由模型从 `run_code` 的工具 SDK 调用它。
+- **按工具名压缩。** 设置 `output.enabled: true` 后，`tools` 中的名字按精确匹配处理，空列表可以停止处理所有工具。仅压缩匹配的顶层、成功且只有一个文本块的结果。Python 以最近的用户问题作为筛选依据，必要时使用工具的查询参数。只替换返回给模型的文本，供程序使用的原始 `value` 保留。对原样通过、错误、图文混合、PTC 内部子调用及其他插件已替换的结果，沿用 DSH 的返回值；压缩器出错时记录告警并返回原结果。`budget` 是成功压缩的文本预算。设置 `output.enabled: false` 可以单独关闭此处理。
+- **原文回查。** 插件默认使用 `$DSH_HOME/context-compression/originals/` 保存原文，可在 `config.store` 中指定绝对路径。发生输出压缩时，DSH 日志包含实际输入与输出 token 以及 `source_id`。操作者可使用同一 Python 环境执行 `context-compress restore SOURCE_ID --store /absolute/path/to/originals` 取回原文。
+
+### 离线验证与卸载
+
+设置以下环境变量后，测试会创建临时 profile，用 DSH CLI 执行真实工具管线。测试覆盖四种开关组合、来源限制、白名单、预算、保留原始值和 Python 故障回退。整个测试使用本地样例。
+
+```sh
+DSH_CLI_ENTRY=/absolute/path/to/deepseek-harness/apps/cli/lib/bin.js \
+RCC_TEST_PYTHON=/absolute/path/to/.venv/bin/python \
+node tests/dsh-plugin.mjs
+```
+
+卸载时，从各 profile 的 `cordis.patch.yml` 中移除 `rule-context-compression` 配置行，再执行对应命令并重启该 profile。Python 命令行工具仍可单独使用。
+
+```sh
+dsh plugin --profile headless remove dsh-plugin-rule-context-compression
+dsh plugin --profile web remove dsh-plugin-rule-context-compression
+```
+
+## 组员配对测试
+
+**LongBench v2（200 题，400 次作答）。** 下载[清单](benchmarks/longbench-200.json)内 `data_url` 指向的官方数据，校验 `data_sha256`，按 `ids` 的顺序取题。清单已排除先导测试的 5 题，并预检完整输入窗口，含 105 道短题、95 道中等长度题。关闭工具输出压缩。阅读关闭组向 DSH 提交完整原文；开启组先按需调用一次 `compress_reading`，将最多 4096 token 的带坐标原文证据提交给相同的 DSH 作答器。两组使用相同证据 JSON 结构、问题、四个选项和系统提示；每题每组仅生成一个答案，奇数题先关后开、偶数题先开后关。沿用先导设置 `deepseek-flash`、`reasoningEffort=low`、温度 0.1、最大输出 16384 token。作答时关闭其他工具，输出 `{"final_answer":"A"}` 形式的一个选项（A–D）。从回答完成事件读取实际模型用量，缓存命中已计入完整输入。统计各组正确数/200、输入、输出、总 token，另列缓存、失败和重试。参考答案仅在评分时载入。
+
+**工具输出（200 份日志，400 次工具调用）。** 在测试前冻结 200 份独立、已脱敏且已知答案的日志及其校验值。单点查找、跨行关联、分组极值、状态更正各选 50 份。每份配一个问题，并将标准答案拆成可核对的事实，记录对应实体或事件。让 DSH 原生 `grep` 针对每份日志的全部非空记录使用同一匹配式 `.`，确认原始返回包含完整记录且超过 1024 token。两个临时 profile 均关闭阅读压缩，输出白名单均为 `[grep]`，只切换 `output.enabled`，开启组的 `output.budget` 设为 1024。向插件提供问题，评分器单独读取答案。以随包 tokenizer 统计模型可见的工具文本，核对两组原始结构化结果一致。报告保留的事实数/全部事实数、所有答案事实均保留的日志数/200、两组可见 token 合计和降幅。工具实验全程在本地执行。
+
+**先导结果。** 另一次 5 题阅读测试中，关闭和开启压缩分别答对 4 题和 3 题，10 次可评分作答的实际输入合计分别为 153,018 和 20,361 token；一次未取得用量回执的额外全文请求单列。10 份合成日志的可见输出从 51,054 降至 9,950 token，保留事实从 25/25 变为 22/25。正式测试请保存样本清单、逐项结果和失败明细，另行报告。
+
 ## 项目结构
 
 | 位置 | 用途 |
 | --- | --- |
+| `dsh-plugin/`、`tests/dsh-plugin.mjs` | DSH 插件、配置与离线集成测试 |
 | `context_compression/reading/` | 原文切分、词法检索、结构关联和证据打包 |
 | `context_compression/tool_output/` | 日志、JSON、JSONL 压缩与可逆模板 |
 | `context_compression/assets/tokenizer.json` | 固定版本的 tokenizer 数据 |

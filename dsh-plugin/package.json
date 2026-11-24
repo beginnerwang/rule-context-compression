@@ -1,0 +1,25 @@
+{
+  "name": "dsh-plugin-rule-context-compression",
+  "version": "0.2.0",
+  "description": "On-demand reading and model-facing tool output compression for DSH",
+  "type": "module",
+  "private": true,
+  "exports": "./index.mjs",
+  "files": [
+    "*.mjs",
+    "cordis.patch.yml"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/dsh": "0.2.1-rc.5"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
